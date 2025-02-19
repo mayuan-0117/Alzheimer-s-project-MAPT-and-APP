@@ -1,0 +1,128 @@
+
+# Define the output directory and file
+output_file <- "/home/mayuan/results/linear_regression_results.txt"
+
+# Define the genes to process
+genes <- c("MAPT", "APP")
+
+# Initialize storage lists
+geneTables <- list()
+phenoTables <- list()
+
+# =======================
+# STEP 1: LOAD GENE DATA
+# =======================
+for (gene in genes) {
+    file_path <- paste0("/home/mayuan/LOFresults/UKBB.LOF.20230809.", gene, ".sco")
+
+    # Read raw file as lines
+    raw_data <- readLines(file_path)
+
+    # Manually split into columns
+    split_data <- strsplit(raw_data, "\\s+")
+    tab <- do.call(rbind, split_data)
+    tab <- as.data.frame(tab, stringsAsFactors = FALSE)
+
+    # Ensure correct column count
+    if (ncol(tab) == 3) {
+        colnames(tab) <- c("IID", "pheno", "score")
+    } else {
+        next  # Skip this gene if formatting is incorrect
+    }
+
+    # Convert data types
+    tab$IID <- as.character(tab$IID)  # Keep IID as character for merging
+    tab$pheno <- as.numeric(tab$pheno)
+    tab$score <- as.numeric(tab$score)
+
+    # Store cleaned table
+    geneTables[[gene]] <- tab
+}
+
+# =================================
+# STEP 2: LOAD PHENOTYPE DATA
+# =================================
+pheno_files <- list.files(path = "/home/mayuan/phenos/", full.names = TRUE)
+
+for (pheno_file in pheno_files) {
+    pheno_name <- gsub(".txt", "", basename(pheno_file))  # Extract phenotype name
+    pheno_data <- read.table(pheno_file, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+
+    # Ensure IID is character for merging
+    pheno_data$IID <- as.character(pheno_data$IID)
+
+    # Store the phenotype table
+    phenoTables[[pheno_name]] <- pheno_data
+}
+
+# =================================
+# STEP 3: LOAD COVARIATE DATA
+# =================================
+covars_file <- "/home/mayuan/LOFresults/Covariates.txt"
+CovarsTable <- read.table(covars_file, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+
+# Ensure IID is character
+CovarsTable$IID <- as.character(CovarsTable$IID)
+
+# Fix the 'sex' column name if incorrectly formatted
+colnames(CovarsTable) <- gsub("^sex\\.[0-9]+", "sex", colnames(CovarsTable))
+
+# =================================
+# STEP 4: RUN LINEAR REGRESSION
+# =================================
+results <- list()
+
+for (gene_name in names(geneTables)) {
+    gene_data <- geneTables[[gene_name]]
+    gene_data$IID <- as.character(gene_data$IID)  # Ensure IID is character
+
+    for (pheno_name in names(phenoTables)) {
+        pheno_data <- phenoTables[[pheno_name]]
+        pheno_data$IID <- as.character(pheno_data$IID)  # Ensure IID is character
+
+        # Merge datasets (inner join on IID)
+        test_data <- merge(gene_data, pheno_data, by = "IID", all = FALSE)
+        test_data <- merge(test_data, CovarsTable, by = "IID", all = FALSE)
+
+        # Skip if no data after merging
+        if (nrow(test_data) == 0) {
+            next
+        }
+
+        # Construct formula dynamically
+        formula_str <- paste(pheno_name, "~ score + sex +", paste0("PC", 1:20, collapse = " + "))
+        formula <- as.formula(formula_str)
+
+        # Fit the linear model
+        model <- lm(formula, data = test_data)
+
+        # Store summary of results for each gene-phenotype combination
+        result_key <- paste(gene_name, pheno_name, sep = "_")
+        results[[result_key]] <- summary(model)
+    }
+}
+
+# =================================
+# STEP 5: SAVE RESULTS
+# =================================
+
+# Loop through each result and save separately
+for (res_key in names(results)) {
+    # Define output file for each gene-phenotype pair
+    output_file <- paste0("/home/mayuan/results/linear_regression_", res_key, ".txt")
+    
+    # Save results to a separate file
+    sink(output_file)
+    cat("\n========================================\n")
+    cat("=== Model Summary: ", res_key, " ===\n")
+    cat("========================================\n\n")
+    print(results[[res_key]])
+    sink()  
+
+    # Print results to console 
+    cat("\n========================================\n")
+    cat("=== Model Summary: ", res_key, " ===\n")
+    cat("========================================\n\n")
+    print(results[[res_key]])
+}
+
